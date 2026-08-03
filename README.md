@@ -1,92 +1,172 @@
-# ToDoApp.Api Capstone
+# ToDoApp.Api Capstone Project
 
-ASP.NET Core Web API capstone implementing EF Core relationships, DTOs, validation, JWT authentication, role authorization and ownership authorization.
+## Project Overview
 
-## Technology
+ToDoApp.Api is an ASP.NET Core Web API for managing task lists, task items and tags. It uses Entity Framework Core with SQL Server, JWT authentication, role-based authorization and ownership-based authorization.
 
-- ASP.NET Core Web API (`net8.0`)
-- Entity Framework Core with SQL Server
-- Controllers inheriting from `ControllerBase`
-- JWT bearer authentication
-- `PasswordHasher<User>` for password hashing
-- Swagger/OpenAPI for endpoint testing
+The application allows users to register, log in, create task lists, add tasks, create tags and assign tags to tasks. Members can only access their own task lists and task items, while Admin users can access resources belonging to any user.
 
-## Relationships in my own words
+## Technologies Used
 
-### User to TaskList: one-to-many
+* ASP.NET Core Web API
+* .NET 8
+* Entity Framework Core
+* SQL Server
+* JWT Bearer Authentication
+* ASP.NET Core PasswordHasher
+* Swagger/OpenAPI
 
-One user can own several task lists, but every task list has one required `UserId`. `TaskList.UserId` is therefore the foreign key on the many side.
+## Database Relationships
 
-### TaskList to TaskItem: one-to-many
+### User and TaskList — One-to-Many
 
-One list can contain several task items, while every task item belongs to exactly one list through `TaskItem.TaskListId`.
+A single user can own several task lists, but each task list belongs to exactly one user.
 
-### TaskItem to Tag: many-to-many through TaskTag
+The `UserId` property in the `TaskList` table is the foreign key that connects a task list to its owner.
 
-A task can have several tags and a tag can appear on several tasks. `TaskTag` joins them using `TaskItemId` and `TagId`. It is an entity rather than a hidden join table because it also stores `TaggedAt`. A unique composite index prevents the same tag from being assigned to the same task twice.
+This means one row in the `Users` table can be connected to many rows in the `TaskLists` table.
 
-## How JWT authentication works
+### TaskList and TaskItem — One-to-Many
 
-Registration hashes the supplied password before the user is saved. Login verifies the supplied password against the stored hash. A successful register or login issues a signed JWT containing the user's ID, email and role.
+A task list can contain many task items, but each task item belongs to one task list.
 
-The JWT bearer middleware reads the token from the `Authorization: Bearer <token>` header. It validates the signature, issuer, audience and expiry. Endpoints decorated with `[Authorize]` reject anonymous or invalid-token requests with `401 Unauthorized`.
+The `TaskListId` property in the `TaskItem` table is the foreign key that connects a task to its parent list.
 
-## How ownership is enforced
+Deleting a task list also deletes its related task items because cascade deletion is configured for this relationship.
 
-`[Authorize]` only proves that the caller is authenticated. Controllers read the caller's ID, email and role from JWT claims and pass a `CallerContext` into the service layer.
+### TaskItem and Tag — Many-to-Many
 
-Before returning, updating or deleting a list or task, the service queries the database for its owner. A Member whose ID does not match the stored owner receives `403 Forbidden`. Admins bypass the ownership restriction. When a Member creates a task list, its `UserId` is always taken from the JWT and not trusted from the request body.
+A task item can have several tags, and one tag can be assigned to several task items.
 
-## Secret configuration
+The many-to-many relationship is implemented using the `TaskTag` join entity.
 
-Do not commit a real JWT key. From the project folder run:
+`TaskTag` contains:
 
-```bash
-dotnet user-secrets init
-dotnet user-secrets set "Jwt:Key" "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS"
+* `TaskItemId`
+* `TagId`
+* `TaggedAt`
+
+`TaskTag` is treated as a full entity rather than a basic join table because it stores the date and time when the tag was assigned.
+
+A unique composite index on `TaskItemId` and `TagId` prevents the same tag from being assigned to the same task more than once.
+
+## JWT Authentication
+
+When a user registers, their password is hashed using ASP.NET Core's `PasswordHasher<User>` before it is stored in the database.
+
+When the user logs in, the submitted password is verified against the stored password hash.
+
+After a successful registration or login, the API generates a JWT containing the following claims:
+
+* User ID
+* Email address
+* Role
+
+The JWT is signed using the configured secret key.
+
+For protected requests, the JWT bearer authentication middleware reads the token from the HTTP authorization header:
+
+```text
+Authorization: Bearer <token>
 ```
 
-## Database setup
+The middleware validates:
 
-Update `DefaultConnection` in `appsettings.json` if necessary, then run:
+* The token signature
+* The token issuer
+* The token audience
+* The token expiration time
+
+All TaskList, TaskItem, Tag and TaskTag endpoints use the `[Authorize]` attribute. A request without a valid JWT receives a `401 Unauthorized` response.
+
+## Ownership Authorization
+
+The `[Authorize]` attribute confirms that the caller is logged in, but it does not confirm that the requested task list or task item belongs to that caller.
+
+For this reason, ownership checks are performed inside the service layer.
+
+The controller reads the authenticated user's ID, email and role from the JWT claims and passes them to the service through a `CallerContext` object.
+
+Before returning, updating or deleting a task list, the service compares the stored `TaskList.UserId` with the authenticated user's ID.
+
+For task items, the service checks the owner of the task's parent task list.
+
+If a Member attempts to access another user's resource, the API returns:
+
+```text
+403 Forbidden
+```
+
+Admin users bypass the ownership check and may access task lists and task items belonging to any user.
+
+When a Member creates a task list, the owner ID is taken from the JWT claim rather than from the request body. This prevents a Member from creating a task list on behalf of another user.
+
+## Validation Rules
+
+The API uses Data Annotations for automatic validation, including:
+
+* Required properties
+* Email format
+* Maximum string lengths
+* Priority range from 1 to 3
+
+The service layer handles business validation, including:
+
+* Duplicate email addresses
+* Duplicate tag names
+* Missing related users
+* Missing task lists
+* Past due dates
+* Duplicate tag assignments
+* Ownership validation
+
+## Main HTTP Status Codes
+
+* `200 OK` — successful GET request or login
+* `201 Created` — successful registration or resource creation
+* `204 No Content` — successful update or deletion
+* `400 Bad Request` — invalid data, missing related resource or past due date
+* `401 Unauthorized` — missing or invalid JWT, or incorrect login details
+* `403 Forbidden` — authenticated Member does not own the requested resource
+* `404 Not Found` — requested task list, task item or tag does not exist
+* `409 Conflict` — duplicate email, tag name or task-tag assignment
+
+## Running the Project
+
+Restore the packages:
 
 ```bash
 dotnet restore
-dotnet tool install --global dotnet-ef
+```
+
+Create the migration:
+
+```bash
 dotnet ef migrations add InitialCreate
+```
+
+Apply the migration:
+
+```bash
 dotnet ef database update
+```
+
+Run the API:
+
+```bash
 dotnet run
 ```
 
-Open the Swagger URL printed in the terminal, normally:
+Open Swagger using the URL displayed in the terminal:
 
 ```text
 https://localhost:<port>/swagger
 ```
 
-## Admin testing
+## Git Branch
 
-All registrations intentionally create a `Member`. To test the required Admin bypass, register an account and update only that test user's `Role` column to `Admin` in SQL Server Management Studio. Restart or log in again to receive a JWT containing the new role.
+The required submission branch is:
 
-## Main status codes
-
-- `201 Created`: successful registration or creation
-- `204 No Content`: successful update or deletion
-- `400 Bad Request`: annotation validation, missing related row, or past due date
-- `401 Unauthorized`: no token, invalid token, or invalid login
-- `403 Forbidden`: signed-in Member trying to access another user's resource
-- `404 Not Found`: requested list, task or tag does not exist
-- `409 Conflict`: duplicate email, duplicate tag name, or duplicate tag assignment
-
-## Required Git workflow
-
-```bash
-git init
-git checkout -b capstone/todo-api
-git add .
-git commit -m "Build ToDo API capstone"
-git remote add origin <your-repository-url>
-git push -u origin capstone/todo-api
+```text
+capstone/todo-api
 ```
-
-Add GitHub user `giddy11` as a repository collaborator from repository Settings > Collaborators.
